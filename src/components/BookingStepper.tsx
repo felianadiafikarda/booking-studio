@@ -95,6 +95,7 @@ export default function BookingStepper({ initialSlug }: { initialSlug?: string }
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [bookingResult, setBookingResult] = useState<any>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [conflictBookingCode, setConflictBookingCode] = useState<string | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number>(900); // 15 mins
   const [copiedVa, setCopiedVa] = useState<boolean>(false);
   const [isSimulatingPayment, setIsSimulatingPayment] = useState<boolean>(false);
@@ -292,6 +293,11 @@ export default function BookingStepper({ initialSlug }: { initialSlug?: string }
       const data = await res.json();
       if (!data.success) {
         setErrorMessage(data.message || 'Terjadi kendala saat memesan slot.');
+        if (data.existingBookingCode) {
+          setConflictBookingCode(data.existingBookingCode);
+        } else {
+          setConflictBookingCode(null);
+        }
         setIsSubmitting(false);
         return;
       }
@@ -395,9 +401,27 @@ export default function BookingStepper({ initialSlug }: { initialSlug?: string }
       </div>
 
       {errorMessage && (
-        <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-start gap-2.5 max-w-4xl mx-auto">
-          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-          <span>{errorMessage}</span>
+        <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm flex items-start gap-2.5 max-w-4xl mx-auto shadow-sm">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
+          <div className="flex-1">
+            <p className="font-semibold">{errorMessage}</p>
+            {conflictBookingCode && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                <a
+                  href={`/booking/status/${conflictBookingCode}`}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-stone-900 text-amber-400 hover:bg-stone-800 text-xs font-bold shadow-sm transition-colors"
+                >
+                  Buka Tagihan Pending ({conflictBookingCode}) →
+                </a>
+                <a
+                  href="/my-bookings"
+                  className="px-3 py-1.5 rounded-lg border border-stone-300 bg-white hover:bg-stone-50 text-stone-700 text-xs font-semibold transition-colors"
+                >
+                  Buka Riwayat Reservasi Saya
+                </a>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

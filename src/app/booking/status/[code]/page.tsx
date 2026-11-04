@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import { BookingStatusBadge, PaymentStatusBadge, formatRupiah } from '@/components/UiBadges';
+import PendingPaymentModal, { PendingBookingInfo } from '@/components/PendingPaymentModal';
 import {
   Calendar,
   Clock,
@@ -53,6 +54,9 @@ export default function BookingStatusPage() {
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [reviewSuccess, setReviewSuccess] = useState(false);
+
+  // Pending Payment Recovery Modal
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   const fetchBooking = async () => {
     try {
@@ -290,6 +294,31 @@ export default function BookingStatusPage() {
             </div>
           </div>
 
+          {/* Pending Payment Warning Hero Banner */}
+          {booking.status === 'PENDING_PAYMENT' && (
+            <div className="px-6 sm:px-8 py-4 bg-amber-500/15 border-b border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-2.5 text-xs text-amber-950 font-medium">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  <strong className="font-bold text-amber-900 block">
+                    Menunggu Pembayaran (Slot Hold Aktif)
+                  </strong>
+                  <span>
+                    Slot jadwal ditahan sementara. Selesaikan pembayaran sebelum batas waktu berakhir
+                    agar pesanan tidak otomatis dibatalkan.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPaymentModal(true)}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-stone-950 shadow-md shrink-0 active:scale-95 transition-all flex items-center justify-center gap-1.5"
+              >
+                Bayar Sekarang (Buka Tagihan) →
+              </button>
+            </div>
+          )}
+
           {/* Ticket Body */}
           <div className="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-12 gap-8">
             {/* Left 8 Cols: Session details */}
@@ -400,29 +429,63 @@ export default function BookingStatusPage() {
               </div>
             </div>
 
-            {/* Right 4 Cols: QR Code & Check-in info */}
+            {/* Right 4 Cols: QR Code Check-in OR Pending Payment Invoice */}
             <div className="md:col-span-4 flex flex-col items-center justify-between text-center p-6 bg-stone-50 rounded-2xl border border-stone-200">
-              <div className="w-full">
-                <span className="text-xs font-bold text-stone-600 uppercase tracking-wider block mb-3">
-                  QR Code Check-in
-                </span>
-                {booking.qrCodeData ? (
-                  <div className="p-3 bg-white rounded-xl border border-stone-200 inline-block shadow-sm">
-                    <img
-                      src={booking.qrCodeData}
-                      alt="QR Check-in"
-                      className="w-40 h-40 object-contain mx-auto"
-                    />
+              {booking.status === 'PENDING_PAYMENT' ? (
+                <div className="w-full space-y-4">
+                  <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-stone-900 text-xs">
+                    <span className="font-bold block uppercase tracking-wider text-[11px] text-amber-800 mb-1">
+                      Menunggu Pembayaran
+                    </span>
+                    <span className="text-2xl font-extrabold text-stone-900 block my-1">
+                      {formatRupiah(
+                        booking.paymentType === 'DP' ? booking.dpAmount : booking.totalPrice
+                      )}
+                    </span>
+                    <span className="text-[11px] text-stone-600 block">
+                      {booking.paymentType === 'DP' ? 'Uang Muka (DP 30%)' : 'Pembayaran Lunas 100%'}
+                    </span>
+                    <span className="inline-block mt-2 font-mono text-[11px] font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                      Metode: {booking.payments?.[0]?.method || 'Online'}
+                    </span>
                   </div>
-                ) : (
-                  <div className="w-40 h-40 bg-stone-200 rounded-xl flex items-center justify-center mx-auto text-xs text-stone-400">
-                    QR Ready
-                  </div>
-                )}
-                <p className="text-[11px] text-stone-500 mt-3 leading-relaxed">
-                  Tunjukkan kode QR ini ke meja resepsionis Lumina Studio saat tiba di lokasi.
-                </p>
-              </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowPaymentModal(true)}
+                    className="w-full py-3.5 px-4 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-stone-950 shadow-md transition-all flex items-center justify-center gap-2 active:scale-95"
+                  >
+                    <QrCode className="w-4 h-4" />
+                    Buka Tagihan & Bayar Sekarang
+                  </button>
+
+                  <p className="text-[11px] text-stone-500 leading-relaxed">
+                    Selesaikan pembayaran melalui QRIS atau Virtual Account agar kode QR check-in studio resmi diterbitkan.
+                  </p>
+                </div>
+              ) : (
+                <div className="w-full">
+                  <span className="text-xs font-bold text-stone-600 uppercase tracking-wider block mb-3">
+                    QR Code Check-in
+                  </span>
+                  {booking.qrCodeData ? (
+                    <div className="p-3 bg-white rounded-xl border border-stone-200 inline-block shadow-sm">
+                      <img
+                        src={booking.qrCodeData}
+                        alt="QR Check-in"
+                        className="w-40 h-40 object-contain mx-auto"
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-40 h-40 bg-stone-200 rounded-xl flex items-center justify-center mx-auto text-xs text-stone-400">
+                      QR Ready
+                    </div>
+                  )}
+                  <p className="text-[11px] text-stone-500 mt-3 leading-relaxed">
+                    Tunjukkan kode QR ini ke meja resepsionis Lumina Studio saat tiba di lokasi.
+                  </p>
+                </div>
+              )}
 
               {/* Action buttons (Reschedule / Cancel / Review) */}
               <div className="w-full pt-6 border-t border-stone-200 mt-6 space-y-2 no-print">
@@ -685,6 +748,46 @@ export default function BookingStatusPage() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Pending Payment Recovery Modal */}
+      {booking && (
+        <PendingPaymentModal
+          booking={{
+            bookingId: booking.id,
+            bookingCode: booking.bookingCode,
+            status: booking.status,
+            expiresAt: booking.expiresAt,
+            guestName: booking.guestName,
+            startTime: booking.startTime,
+            endTime: booking.endTime,
+            packageName: booking.package?.name,
+            roomName: booking.room?.name,
+            totalPrice: booking.totalPrice,
+            dpAmount: booking.dpAmount,
+            paymentType: booking.paymentType,
+            payment: booking.payments?.[0]
+              ? {
+                  id: booking.payments[0].id,
+                  amount: booking.payments[0].amount,
+                  type: booking.payments[0].type,
+                  method: booking.payments[0].method,
+                  vaNumber: booking.payments[0].vaNumber,
+                  qrisPayload: booking.qrisPayload,
+                  qrisDataUrl: booking.qrisPaymentDataUrl,
+                  status: booking.payments[0].status,
+                }
+              : null,
+          }}
+          isOpen={showPaymentModal}
+          onClose={() => setShowPaymentModal(false)}
+          onPaymentSuccess={() => {
+            fetchBooking();
+          }}
+          onBookingCancelled={() => {
+            fetchBooking();
+          }}
+        />
       )}
 
       <Footer />

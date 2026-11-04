@@ -176,132 +176,200 @@ export async function POST(req: NextRequest) {
     const holdMinutes = 15;
     const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
 
-    // Execute atomic creation & conflict verification in transaction
-    const result = await prisma.$transaction(async (tx) => {
-      // Find candidate rooms
-      const rooms = await tx.room.findMany({
-        where: { active: true, ...(parsed.data.roomId ? { id: parsed.data.roomId } : {}) },
+    // Prevent user from creating duplicate booking on the same schedule if they have an active unpaid booking
+    const userMatchFilter = currentUser?.userId
+      ? { OR: [{ userId: currentUser.userId }, { guestEmail: guestEmail.toLowerCase().trim() }] }
+      : { guestEmail: guestEmail.toLowerCase().trim() };
+
+    const existingPendingBooking = await prisma.booking.findFirst({
+      where: {
+        ...userMatchFilter,
+        status: BookingStatus.PENDING_PAYMENT,
+        expiresAt: { gt: new Date() },
+        startTime: { lt: endTimeWithBuffer },
+        endTime: { gt: startTime },
+      },
+      include: {
+        package: true,
+        payments: { where: { status: PaymentStatus.PENDING } },
+      },
+    });
+
+    if (existingPendingBooking) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: 'PENDING_PAYMENT_EXISTS',
+          message: `Anda masih memiliki tagihan yang belum dibayar (Kode: ${existingPendingBooking.bookingCode}) untuk sesi jadwal ini. Silakan selesaikan pembayaran tagihan yang ada atau batalkan terlebih dahulu sebelum memesan jadwal baru.`,
+          existingBookingCode: existingPendingBooking.bookingCode,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Find candidate rooms before starting the transaction to minimize transaction duration
+    const rooms = await prisma.room.findMany({
+      where: { active: true, ...(parsed.data.roomId ? { id: parsed.data.roomId } : {}) },
+    });
+
+    if (rooms.length === 0) {
+      return NextResponse.json(
+        { success: false, message: 'Tidak ada ruangan studio yang tersedia' },
+        { status: 400 }
+      );
+    }
+
+    // Find a room without booking or blocked conflict
+    let selectedRoomId: string | null = null;
+    const now = new Date();
+
+    for (const room of rooms) {
+      // Check conflicting active bookings
+      const conflictingBooking = await prisma.booking.findFirst({
+        where: {
+          roomId: room.id,
+          startTime: { lt: endTimeWithBuffer },
+          endTime: { gt: startTime },
+          OR: [
+            { status: { in: [BookingStatus.CONFIRMED, BookingStatus.COMPLETED] } },
+            { status: BookingStatus.PENDING_PAYMENT, expiresAt: { gt: now } },
+          ],
+        },
       });
 
-      if (rooms.length === 0) {
-        throw new Error('Tidak ada ruangan studio yang tersedia');
-      }
+      if (conflictingBooking) continue;
 
-      // Find a room without booking or blocked conflict
-      let selectedRoomId: string | null = null;
-      const now = new Date();
+      // Check blocked slots
+      const conflictingBlock = await prisma.blockedSlot.findFirst({
+        where: {
+          roomId: room.id,
+          startTime: { lt: endTime },
+          endTime: { gt: startTime },
+        },
+      });
 
-      for (const room of rooms) {
-        // Check conflicting active bookings
-        const conflictingBooking = await tx.booking.findFirst({
+      if (conflictingBlock) continue;
+
+      selectedRoomId = room.id;
+      break;
+    }
+
+    if (!selectedRoomId) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            'Slot jadwal yang Anda pilih baru saja dipesan oleh pelanggan lain. Silakan pilih slot jam lain.',
+        },
+        { status: 409 }
+      );
+    }
+
+    const bookingCode = generateBookingCode();
+
+    // Execute atomic creation & conflict verification in a lean transaction
+    const result = await prisma.$transaction(
+      async (tx) => {
+        // Quick concurrency double-check for the selected room
+        const concurrentBooking = await tx.booking.findFirst({
           where: {
-            roomId: room.id,
+            roomId: selectedRoomId,
             startTime: { lt: endTimeWithBuffer },
             endTime: { gt: startTime },
             OR: [
               { status: { in: [BookingStatus.CONFIRMED, BookingStatus.COMPLETED] } },
-              { status: BookingStatus.PENDING_PAYMENT, expiresAt: { gt: now } },
+              { status: BookingStatus.PENDING_PAYMENT, expiresAt: { gt: new Date() } },
             ],
           },
         });
 
-        if (conflictingBooking) continue;
+        if (concurrentBooking) {
+          throw new Error(
+            'Slot jadwal yang Anda pilih baru saja dipesan oleh pelanggan lain. Silakan pilih slot jam lain.'
+          );
+        }
 
-        // Check blocked slots
-        const conflictingBlock = await tx.blockedSlot.findFirst({
-          where: {
-            roomId: room.id,
-            startTime: { lt: endTime },
-            endTime: { gt: startTime },
-          },
-        });
-
-        if (conflictingBlock) continue;
-
-        selectedRoomId = room.id;
-        break;
-      }
-
-      if (!selectedRoomId) {
-        throw new Error('Slot jadwal yang Anda pilih baru saja dipesan oleh pelanggan lain. Silakan pilih slot jam lain.');
-      }
-
-      const bookingCode = generateBookingCode();
-
-      // Create Booking
-      const newBooking = await tx.booking.create({
-        data: {
-          bookingCode,
-          userId: currentUser?.userId || null,
-          guestName,
-          guestEmail,
-          guestPhone,
-          packageId,
-          roomId: selectedRoomId,
-          startTime,
-          endTime,
-          status: BookingStatus.PENDING_PAYMENT,
-          paymentType: paymentType as PaymentType,
-          subtotal,
-          discountAmount,
-          promoCode: validatedPromoCode,
-          totalPrice,
-          dpAmount,
-          remainingAmount,
-          notes: notes || null,
-          expiresAt,
-          bookingAddOns: {
-            create: addOnRecords.map((ar) => ({
-              addOnId: ar.addOnId,
-              qty: ar.qty,
-              unitPrice: ar.unitPrice,
-              subtotal: ar.subtotal,
-            })),
-          },
-          payments: {
-            create: {
-              type: paymentType === 'DP' ? PaymentPhase.DP : PaymentPhase.FULL,
-              amount: initialPaymentAmount,
-              status: PaymentStatus.PENDING,
-              method: paymentMethod,
-              provider: 'SIMULATOR',
-              providerRef: `PAY-${bookingCode}-1`,
+        // Create Booking
+        const newBooking = await tx.booking.create({
+          data: {
+            bookingCode,
+            userId: currentUser?.userId || null,
+            guestName,
+            guestEmail,
+            guestPhone,
+            packageId,
+            roomId: selectedRoomId,
+            startTime,
+            endTime,
+            status: BookingStatus.PENDING_PAYMENT,
+            paymentType: paymentType as PaymentType,
+            subtotal,
+            discountAmount,
+            promoCode: validatedPromoCode,
+            totalPrice,
+            dpAmount,
+            remainingAmount,
+            notes: notes || null,
+            expiresAt,
+            bookingAddOns: {
+              create: addOnRecords.map((ar) => ({
+                addOnId: ar.addOnId,
+                qty: ar.qty,
+                unitPrice: ar.unitPrice,
+                subtotal: ar.subtotal,
+              })),
+            },
+            payments: {
+              create: {
+                type: paymentType === 'DP' ? PaymentPhase.DP : PaymentPhase.FULL,
+                amount: initialPaymentAmount,
+                status: PaymentStatus.PENDING,
+                method: paymentMethod,
+                provider: 'SIMULATOR',
+                providerRef: `PAY-${bookingCode}-1`,
+              },
             },
           },
-        },
-        include: {
-          package: true,
-          room: true,
-          bookingAddOns: { include: { addOn: true } },
-          payments: true,
-        },
-      });
-
-      // Increment promo usage if used
-      if (validatedPromoCode) {
-        await tx.promo.update({
-          where: { code: validatedPromoCode },
-          data: { usedCount: { increment: 1 } },
+          include: {
+            package: true,
+            room: true,
+            bookingAddOns: { include: { addOn: true } },
+            payments: true,
+          },
         });
-      }
 
-      // Log audit
-      await tx.auditLog.create({
+        // Increment promo usage if used
+        if (validatedPromoCode) {
+          await tx.promo.update({
+            where: { code: validatedPromoCode },
+            data: { usedCount: { increment: 1 } },
+          });
+        }
+
+        return newBooking;
+      },
+      {
+        maxWait: 10000,
+        timeout: 30000,
+      }
+    );
+
+    // Record audit log asynchronously outside the transaction to prevent blocking or closing the checkout
+    prisma.auditLog
+      .create({
         data: {
           userId: currentUser?.userId || null,
           action: 'BOOKING_CREATED',
           entity: 'Booking',
-          entityId: newBooking.id,
+          entityId: result.id,
           details: JSON.stringify({
-            bookingCode: newBooking.bookingCode,
+            bookingCode: result.bookingCode,
             totalPrice,
             paymentType,
           }),
         },
-      });
-
-      return newBooking;
-    });
+      })
+      .catch((err) => console.error('Failed to write audit log:', err));
 
     const primaryPayment = result.payments[0];
     const vaNumber = generateVirtualAccountNumber(paymentMethod, result.bookingCode);

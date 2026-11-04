@@ -94,6 +94,20 @@ export async function GET(
       ? generateVirtualAccountNumber(latestPayment.method, booking.bookingCode)
       : undefined;
 
+    const isPendingPayment = booking.status === 'PENDING_PAYMENT';
+    const qrisPayload = latestPayment?.method === 'QRIS'
+      ? `00020101021226${booking.bookingCode}5204000053033605802ID5914Lumina Studio`
+      : undefined;
+
+    let qrisPaymentDataUrl: string | undefined = undefined;
+    if (isPendingPayment && qrisPayload) {
+      qrisPaymentDataUrl = await QRCode.toDataURL(qrisPayload, { width: 300, margin: 2 });
+    }
+
+    const remainingSeconds = isPendingPayment
+      ? Math.max(0, Math.floor((new Date(booking.expiresAt).getTime() - now.getTime()) / 1000))
+      : 0;
+
     return NextResponse.json({
       success: true,
       data: {
@@ -149,6 +163,9 @@ export async function GET(
           vaNumber,
         })),
         qrCodeData,
+        qrisPaymentDataUrl,
+        qrisPayload,
+        remainingSeconds,
         eTicketUrl,
         whatsappLink: waLink,
         hasReview: !!booking.review,
