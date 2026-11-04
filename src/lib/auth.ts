@@ -12,10 +12,13 @@ export interface TokenPayload {
   name: string;
 }
 
-// Pindahkan pemanggilan secret ke dalam helper function
-// agar hanya dibaca saat runtime (saat ada user login/akses API)
+// Secret dipanggil murni dari environment variables
 function getJwtSecret(): string {
-  return process.env.JWT_SECRET || 'fotostudio_super_secret_jwt_key_2026_xyz';
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET environment variable is missing');
+  }
+  return secret;
 }
 
 export function signToken(payload: TokenPayload): string {
