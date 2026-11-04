@@ -3,7 +3,6 @@ import { cookies } from 'next/headers';
 import prisma from './prisma';
 import { Role } from '@prisma/client';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fotostudio_super_secret_jwt_key_2026_xyz';
 const COOKIE_NAME = 'fotostudio_session';
 
 export interface TokenPayload {
@@ -13,13 +12,19 @@ export interface TokenPayload {
   name: string;
 }
 
+// Pindahkan pemanggilan secret ke dalam helper function
+// agar hanya dibaca saat runtime (saat ada user login/akses API)
+function getJwtSecret(): string {
+  return process.env.JWT_SECRET || 'fotostudio_super_secret_jwt_key_2026_xyz';
+}
+
 export function signToken(payload: TokenPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
 }
 
 export function verifyToken(token: string): TokenPayload | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as TokenPayload;
+    return jwt.verify(token, getJwtSecret()) as TokenPayload;
   } catch {
     return null;
   }
@@ -48,4 +53,3 @@ export async function requireAuth(allowedRoles?: Role[]): Promise<TokenPayload> 
 }
 
 export { COOKIE_NAME };
-
